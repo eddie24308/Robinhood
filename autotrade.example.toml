@@ -1,0 +1,79 @@
+# autotrade configuration
+#
+# Copy to autotrade.toml and edit. Everything here is enforced by autotrade/guards.py,
+# and every limit fails closed: omit one and you get the conservative default, not
+# "unlimited". Unknown keys raise rather than being ignored, so a typo in a cap
+# cannot silently disable it.
+#
+# Validate with:  python -m autotrade check
+
+[account]
+# The "Agentic" cash account (****4944) — the only one this agent can reach.
+# The margin and Roth accounts are agentic_allowed=false and cannot be used here.
+number = "771654944"
+
+# "paper" simulates fills and can never place a real order.
+# "live" emits intents for the agent to review with you; it still cannot place
+# anything on its own.
+mode = "paper"
+
+
+[limits]
+# Hard caps. autotrade/config.py refuses values above its own ceilings
+# ($5,000/order, $10,000/day, 20 orders/day) regardless of what is written here.
+max_notional_per_order = 100.0
+max_notional_per_day = 300.0
+max_position_notional_per_symbol = 1000.0
+max_orders_per_day = 3
+
+# No new positions once realised losses reach this for the day.
+daily_loss_limit = 200.0
+
+# Nothing outside this list can be bought, whatever the rules say.
+allowlist = ["HOOD", "VOO", "SPY", "AAPL"]
+
+# Refuse to act on a quote older than this. Prevents trading on stale data
+# after a delay between fetching prices and deciding.
+max_quote_age_seconds = 300
+
+# Marketable limit orders are priced this far above the reference price so they
+# fill promptly without the unbounded risk of a market order.
+limit_offset_bps = 10.0
+
+# Must stay true in live mode; config loading rejects live + false.
+require_confirmation = true
+
+
+# --- Rules -------------------------------------------------------------------
+# Only buys. Selling is deliberately not automated — exits deserve a human.
+# See `python -m autotrade rules` for every available condition.
+
+[[rules]]
+id = "hood-dip-85"
+symbol = "HOOD"
+condition = "price_below"
+threshold = 85.0
+amount_usd = 100.0
+cooldown_days = 7
+note = "Add on a pullback under 85."
+
+[[rules]]
+id = "hood-drawdown-10"
+symbol = "HOOD"
+condition = "drawdown_from_high"
+threshold = 10.0          # percent below the trailing high
+lookback_days = 30
+amount_usd = 100.0
+cooldown_days = 14
+note = "Add after a 10% fall from the 30-day high."
+enabled = false
+
+[[rules]]
+id = "voo-weekly"
+symbol = "VOO"
+condition = "weekly_schedule"
+weekday = "monday"
+amount_usd = 100.0
+cooldown_days = 6         # keeps it to once per week even if run daily
+note = "Plain DCA. Needs no forecasting skill to be sound."
+enabled = false

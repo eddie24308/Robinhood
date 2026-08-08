@@ -1,3 +1,19 @@
+# Robinhood
+
+Two packages that are deliberately **not** wired together:
+
+- **`stockforecast`** — short-horizon return forecasting with honest skill
+  measurement. Documented below.
+- **`autotrade`** — rule-driven order preparation with mandatory human
+  approval. See [AUTOTRADE.md](AUTOTRADE.md).
+
+They stay separate on purpose. `stockforecast` measured *negative*
+out-of-sample skill on HOOD, so `autotrade` acts on rules you write down, not
+on model output. If a signal ever clears its own walk-forward test, that is the
+moment to reconsider — not before.
+
+---
+
 # stockforecast
 
 Short-horizon equity return forecasting for any ticker, built so that the
@@ -166,7 +182,17 @@ stockforecast/
   report.py       text rendering
   cli.py          command line
 scripts/mcp_to_csv.py
-tests/            71 tests
+
+autotrade/        rule-driven order prep (see AUTOTRADE.md)
+  config.py       TOML config, fail-closed validation
+  rules.py        user-specified buy conditions
+  guards.py       risk limits that block, never resize
+  intents.py      inert order proposals
+  ledger.py       append-only audit log + paper broker
+  engine.py       plan / paper-fill / emit for review
+  cli.py          command line
+
+tests/            130 tests
 ```
 
 ## Tests

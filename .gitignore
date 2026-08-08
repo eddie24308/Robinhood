@@ -22,3 +22,10 @@ data/mcp/
 .DS_Store
 .idea/
 .vscode/
+
+# Live autotrade config and runtime state. Only the example is committed —
+# your real config carries an account number and your actual limits.
+autotrade.toml
+.autotrade/
+intents.json
+quotes.json

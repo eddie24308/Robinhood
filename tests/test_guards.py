@@ -1,0 +1,240 @@
+"""Guard tests.
+
+Each guard gets a test that proves it actually blocks. A risk limit that is
+configured but not enforced is worse than no limit, because it produces
+confidence without protection.
+"""
+
+from __future__ import annotations
+
+from datetime import date, datetime, timedelta, timezone
+
+import pytest
+
+from autotrade.config import RiskLimits
+from autotrade.guards import PortfolioState, RiskGuard, apply_guards
+from autotrade.intents import IntentStatus, OrderIntent
+
+NOW = datetime(2026, 8, 10, 15, 0, tzinfo=timezone.utc)
+TODAY = date(2026, 8, 10)
+
+
+def make_limits(**overrides) -> RiskLimits:
+    base = {
+        "max_notional_per_order": 100.0,
+        "max_notional_per_day": 300.0,
+        "max_position_notional_per_symbol": 1000.0,
+        "max_orders_per_day": 3,
+        "daily_loss_limit": 200.0,
+        "allowlist": ("HOOD", "VOO"),
+        "max_quote_age_seconds": 300,
+        "limit_offset_bps": 10.0,
+    }
+    base.update(overrides)
+    return RiskLimits(**base)
+
+
+def make_intent(**overrides) -> OrderIntent:
+    base = dict(
+        intent_id="i1",
+        created_at=NOW,
+        trade_date=TODAY,
+        account_number="771654944",
+        mode="paper",
+        symbol="HOOD",
+        side="buy",
+        amount_usd=100.0,
+        reference_price=93.28,
+        order_type="limit",
+        limit_price=93.37,
+        time_in_force="gfd",
+        rule_id="r1",
+        rule_reason="test",
+        status=IntentStatus.READY_FOR_REVIEW,
+        detail={"quote_time": NOW.isoformat()},
+    )
+    base.update(overrides)
+    return OrderIntent(**base)
+
+
+def make_state(**overrides) -> PortfolioState:
+    base = {"trade_date": TODAY}
+    base.update(overrides)
+    return PortfolioState(**base)
+
+
+def check(intent, state=None, limits=None, kill=False):
+    guard = RiskGuard(limits or make_limits(), kill_switch_active=kill)
+    return guard.check(intent, state or make_state(), now=NOW)
+
+
+def test_clean_intent_passes() -> None:
+    outcome = check(make_intent())
+    assert outcome.allowed, outcome.messages()
+    assert "allowlist" in outcome.passed
+
+
+def test_kill_switch_blocks_everything() -> None:
+    outcome = check(make_intent(), kill=True)
+    assert not outcome.allowed
+    assert any("kill_switch" in message for message in outcome.messages())
+
+
+def test_symbol_not_in_allowlist_is_blocked() -> None:
+    outcome = check(make_intent(symbol="TSLA"))
+    assert not outcome.allowed
+    assert any("allowlist" in message for message in outcome.messages())
+
+
+def test_sell_side_is_blocked() -> None:
+    """Selling is never automated."""
+    outcome = check(make_intent(side="sell"))
+    assert not outcome.allowed
+    assert any("side" in message for message in outcome.messages())
+
+
+def test_per_order_notional_cap() -> None:
+    outcome = check(make_intent(amount_usd=250.0))
+    assert not outcome.allowed
+    assert any("per_order_notional" in message for message in outcome.messages())
+
+
+def test_daily_notional_cap() -> None:
+    outcome = check(make_intent(amount_usd=100.0), state=make_state(notional_today=250.0))
+    assert not outcome.allowed
+    assert any("daily_notional" in message for message in outcome.messages())
+
+
+def test_daily_order_count_cap() -> None:
+    outcome = check(make_intent(), state=make_state(orders_today=3))
+    assert not outcome.allowed
+    assert any("daily_order_count" in message for message in outcome.messages())
+
+
+def test_position_cap_per_symbol() -> None:
+    outcome = check(
+        make_intent(amount_usd=100.0),
+        state=make_state(positions_notional={"HOOD": 950.0}),
+    )
+    assert not outcome.allowed
+    assert any("position_cap" in message for message in outcome.messages())
+
+
+def test_daily_loss_limit_stops_new_positions() -> None:
+    outcome = check(make_intent(), state=make_state(realized_pnl_today=-200.0))
+    assert not outcome.allowed
+    assert any("daily_loss_limit" in message for message in outcome.messages())
+
+
+def test_stale_quote_is_blocked() -> None:
+    stale = (NOW - timedelta(seconds=600)).isoformat()
+    outcome = check(make_intent(detail={"quote_time": stale}))
+    assert not outcome.allowed
+    assert any("quote_freshness" in message for message in outcome.messages())
+
+
+def test_missing_quote_timestamp_is_blocked() -> None:
+    """Fail closed: absent data is a violation, not a pass."""
+    outcome = check(make_intent(detail={}))
+    assert not outcome.allowed
+    assert any("quote_freshness" in message for message in outcome.messages())
+
+
+def test_future_quote_timestamp_is_blocked() -> None:
+    future = (NOW + timedelta(seconds=300)).isoformat()
+    outcome = check(make_intent(detail={"quote_time": future}))
+    assert not outcome.allowed
+    assert any("clock problem" in message for message in outcome.messages())
+
+
+def test_limit_far_above_reference_is_blocked() -> None:
+    outcome = check(make_intent(reference_price=93.28, limit_price=120.0))
+    assert not outcome.allowed
+    assert any("price_sanity" in message for message in outcome.messages())
+
+
+def test_non_positive_price_is_blocked() -> None:
+    outcome = check(make_intent(reference_price=0.0, limit_price=0.0))
+    assert not outcome.allowed
+    assert any("price_sanity" in message for message in outcome.messages())
+
+
+def test_duplicate_fingerprint_is_blocked() -> None:
+    intent = make_intent()
+    outcome = check(intent, state=make_state(fingerprints_today={intent.fingerprint()}))
+    assert not outcome.allowed
+    assert any("duplicate" in message for message in outcome.messages())
+
+
+def test_stale_plan_date_is_blocked() -> None:
+    outcome = check(make_intent(trade_date=date(2026, 8, 3)))
+    assert not outcome.allowed
+    assert any("trade_date" in message for message in outcome.messages())
+
+
+def test_all_violations_are_reported_not_just_the_first() -> None:
+    """Fixing one blocker should not reveal a surprise second one."""
+    outcome = check(
+        make_intent(symbol="TSLA", amount_usd=500.0, detail={}),
+        state=make_state(orders_today=5),
+    )
+    guards_hit = {message.split(":")[0] for message in outcome.messages()}
+    assert {"allowlist", "per_order_notional", "quote_freshness", "daily_order_count"} <= guards_hit
+
+
+def test_batch_accumulates_against_daily_cap() -> None:
+    """Three $100 intents against a $250 cap must leave the third blocked."""
+    limits = make_limits(max_notional_per_day=250.0, max_orders_per_day=10)
+    intents = [
+        make_intent(intent_id=f"i{i}", rule_id=f"r{i}", amount_usd=100.0) for i in range(3)
+    ]
+
+    result = apply_guards(intents, limits, make_state(), now=NOW)
+
+    assert result[0].status == IntentStatus.READY_FOR_REVIEW
+    assert result[1].status == IntentStatus.READY_FOR_REVIEW
+    assert result[2].status == IntentStatus.BLOCKED
+    assert any("daily_notional" in message for message in result[2].blocked_by)
+
+
+def test_batch_accumulates_against_order_count() -> None:
+    limits = make_limits(max_orders_per_day=2, max_notional_per_day=10_000.0)
+    intents = [
+        make_intent(intent_id=f"i{i}", rule_id=f"r{i}", amount_usd=50.0) for i in range(4)
+    ]
+
+    result = apply_guards(intents, limits, make_state(), now=NOW)
+
+    assert sum(i.status == IntentStatus.READY_FOR_REVIEW for i in result) == 2
+    assert sum(i.status == IntentStatus.BLOCKED for i in result) == 2
+
+
+def test_batch_accumulates_against_position_cap() -> None:
+    limits = make_limits(
+        max_position_notional_per_symbol=150.0, max_orders_per_day=10, max_notional_per_day=10_000.0
+    )
+    intents = [
+        make_intent(intent_id=f"i{i}", rule_id=f"r{i}", amount_usd=100.0) for i in range(2)
+    ]
+
+    result = apply_guards(intents, limits, make_state(), now=NOW)
+
+    assert result[0].status == IntentStatus.READY_FOR_REVIEW
+    assert result[1].status == IntentStatus.BLOCKED
+    assert any("position_cap" in message for message in result[1].blocked_by)
+
+
+def test_guards_never_mutate_order_size() -> None:
+    """Blocked, not shrunk. Silently resizing hides that a cap was hit."""
+    intent = make_intent(amount_usd=500.0)
+    apply_guards([intent], make_limits(), make_state(), now=NOW)
+    assert intent.amount_usd == 500.0
+    assert intent.status == IntentStatus.BLOCKED
+
+
+def test_blocked_intent_refuses_to_produce_review_arguments() -> None:
+    intent = make_intent(symbol="TSLA")
+    apply_guards([intent], make_limits(), make_state(), now=NOW)
+
+    with pytest.raises(ValueError, match="not ready for review"):
+        intent.review_call_arguments()

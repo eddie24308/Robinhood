@@ -65,6 +65,28 @@ agent: place_equity_order  (only for the ones you approved)
 `run` is paper-only and refuses in live mode; live must go through `plan`, so
 the intent file and the review step cannot be skipped by habit.
 
+## Monday checklist
+
+`autotrade.toml` is gitignored and the working container is ephemeral, so a new
+session starts from the repo with no live config. Recreating it is two lines:
+
+```bash
+cp autotrade.example.toml autotrade.toml
+sed -i 's/^mode = "paper".*/mode = "live"/' autotrade.toml
+python -m autotrade check          # confirm LIVE, $15 VTI + $10 VXUS, caps
+```
+
+Then ask the agent to run the weekly buy. It will:
+
+1. `get_equity_quotes` for VTI and VXUS, and write them to a quotes file.
+2. `python -m autotrade plan --quotes ...` — rules evaluate, guards run,
+   intents are written. Nothing is ordered.
+3. `review_equity_order` per intent, and show you cost plus any broker alerts.
+4. Place **only** what you approve, then `python -m autotrade record`.
+
+Current state as of 2026-08-08: buying power $30, no positions. The plan spends
+$25, so week one fits and week two does not without a deposit.
+
 ## Kill switch
 
 ```bash

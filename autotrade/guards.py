@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 
 from autotrade.config import RiskLimits
-from autotrade.intents import IntentStatus, OrderIntent
+from autotrade.intents import ExecutionStyle, IntentStatus, OrderIntent
 
 
 @dataclass(frozen=True)
@@ -92,6 +92,8 @@ class RiskGuard:
             self._check_allowlist,
             self._check_price_sanity,
             self._check_quote_freshness,
+            self._check_fractional_allowed,
+            self._check_spread,
             self._check_per_order_notional,
             self._check_daily_notional,
             self._check_daily_order_count,
@@ -194,6 +196,55 @@ class RiskGuard:
             return GuardViolation(
                 "quote_freshness",
                 f"quote timestamp is {-age.total_seconds():.0f}s in the future - clock problem",
+            )
+        return None
+
+    def _check_fractional_allowed(
+        self, intent: OrderIntent, state: PortfolioState, now: datetime
+    ) -> GuardViolation | None:
+        """Block a fractional order when the config has not opted into one.
+
+        Buying less than a whole share forces a market order, which gives up
+        price protection. That trade-off should be a deliberate choice, so it
+        is off unless ``allow_fractional`` is set.
+        """
+        if intent.execution_style != ExecutionStyle.NOTIONAL_MARKET:
+            return None
+        if self.limits.allow_fractional:
+            return None
+        return GuardViolation(
+            "fractional_allowed",
+            f"${intent.amount_usd:,.2f} buys less than one share of {intent.symbol} at "
+            f"{intent.reference_price:,.2f}, which requires a fractional market order. "
+            "Set limits.allow_fractional = true, or raise the order size above one share.",
+        )
+
+    def _check_spread(
+        self, intent: OrderIntent, state: PortfolioState, now: datetime
+    ) -> GuardViolation | None:
+        """Block market orders into a wide spread.
+
+        A limit order carries its own price cap, so this only applies to
+        notional market orders. For a liquid ETF the spread is a basis point or
+        two; a sudden wide spread means thin liquidity or a halted book, and is
+        exactly when an uncapped market order does damage.
+        """
+        if intent.execution_style != ExecutionStyle.NOTIONAL_MARKET:
+            return None
+
+        spread = intent.spread_bps
+        if spread is None:
+            return GuardViolation(
+                "spread",
+                "no usable bid/ask on the quote, so the spread cannot be checked; "
+                "a market order without that check is not allowed",
+            )
+        if spread > self.limits.max_spread_bps:
+            return GuardViolation(
+                "spread",
+                f"bid-ask spread is {spread:.1f} bps (bid {intent.bid_price:,.2f} / "
+                f"ask {intent.ask_price:,.2f}), over the {self.limits.max_spread_bps:.0f} bps "
+                "limit - refusing an uncapped market order into a thin book",
             )
         return None
 

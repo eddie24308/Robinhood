@@ -25,7 +25,7 @@ import pandas as pd
 from autotrade.config import AutotradeConfig
 from autotrade.errors import EngineError
 from autotrade.guards import PortfolioState, apply_guards
-from autotrade.intents import IntentStatus, OrderIntent
+from autotrade.intents import ExecutionStyle, IntentStatus, OrderIntent
 from autotrade.ledger import Ledger, PaperBroker
 from autotrade.rules import MarketContext, RuleEvaluation, evaluate_rule
 
@@ -37,6 +37,8 @@ class Quote:
     symbol: str
     price: float
     time: datetime
+    bid: float | None = None
+    ask: float | None = None
 
     @classmethod
     def from_dict(cls, symbol: str, data: dict | float) -> Quote:
@@ -54,7 +56,17 @@ class Quote:
         if time.tzinfo is None:
             time = time.replace(tzinfo=timezone.utc)
 
-        return cls(symbol=symbol.upper(), price=float(data["price"]), time=time)
+        def optional(key: str) -> float | None:
+            value = data.get(key)
+            return float(value) if value not in (None, "", 0) else None
+
+        return cls(
+            symbol=symbol.upper(),
+            price=float(data["price"]),
+            time=time,
+            bid=optional("bid"),
+            ask=optional("ask"),
+        )
 
 
 @dataclass
@@ -211,6 +223,15 @@ class Engine:
         offset = self.config.limits.limit_offset_bps / 10_000.0
         limit_price = round(quote.price * (1.0 + offset), 2)
 
+        # A limit order needs at least one whole share; anything smaller can
+        # only be expressed as a fractional market order.
+        affords_whole_share = rule.amount_usd >= limit_price
+        style = (
+            ExecutionStyle.WHOLE_SHARE_LIMIT
+            if affords_whole_share
+            else ExecutionStyle.NOTIONAL_MARKET
+        )
+
         return OrderIntent(
             intent_id=str(uuid.uuid4()),
             created_at=now,
@@ -221,9 +242,12 @@ class Engine:
             side="buy",
             amount_usd=float(rule.amount_usd),
             reference_price=quote.price,
-            order_type="limit",
+            order_type="limit" if style == ExecutionStyle.WHOLE_SHARE_LIMIT else "market",
             limit_price=limit_price,
             time_in_force="gfd",
+            execution_style=style,
+            bid_price=quote.bid,
+            ask_price=quote.ask,
             rule_id=rule.id,
             rule_reason=evaluation.reason,
             status=IntentStatus.READY_FOR_REVIEW,

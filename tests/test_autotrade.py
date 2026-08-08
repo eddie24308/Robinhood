@@ -11,7 +11,7 @@ import pytest
 
 from autotrade.config import ConfigError, RiskLimits, load_config
 from autotrade.engine import Engine, EngineError, Quote, load_quotes
-from autotrade.intents import IntentStatus, OrderIntent
+from autotrade.intents import ExecutionStyle, IntentStatus, OrderIntent
 from autotrade.ledger import Ledger, PaperBroker
 from autotrade.rules import MarketContext, evaluate_rule
 
@@ -219,6 +219,11 @@ def make_intent(tmp_path=None, **overrides) -> OrderIntent:
         rule_id="r1",
         rule_reason="test",
         status=IntentStatus.READY_FOR_REVIEW,
+        # $100 affords a whole share of HOOD at ~93, so the engine would pick
+        # the limit style here. Fractional cases are covered explicitly below.
+        execution_style=ExecutionStyle.WHOLE_SHARE_LIMIT,
+        bid_price=93.20,
+        ask_price=93.35,
         detail={"quote_time": NOW.isoformat()},
     )
     base.update(overrides)
@@ -406,6 +411,97 @@ def test_only_actionable_intents_are_emitted(tmp_path: Path) -> None:
 
     out = engine.emit_for_review(result, tmp_path / "intents.json")
     assert '"intents": []' in out.read_text()
+
+
+ETF_CONFIG = """
+[account]
+number = "771654944"
+mode = "paper"
+
+[limits]
+max_notional_per_order = 100.0
+max_notional_per_day = 300.0
+allowlist = ["VOO"]
+allow_fractional = true
+
+[[rules]]
+id = "voo-weekly"
+symbol = "VOO"
+condition = "every_run"
+amount_usd = 100.0
+cooldown_days = 7
+"""
+
+
+def test_sub_share_order_uses_fractional_market(tmp_path: Path) -> None:
+    """$100 of a $710 ETF cannot be a limit order — the broker rejects those."""
+    config = load_config(write_config(tmp_path, ETF_CONFIG))
+    engine = Engine(config)
+
+    quote = Quote("VOO", 710.57, NOW, bid=710.52, ask=711.00)
+    result = engine.plan({"VOO": quote}, today=TODAY, now=NOW)
+
+    assert len(result.actionable) == 1
+    intent = result.actionable[0]
+    assert intent.execution_style is ExecutionStyle.NOTIONAL_MARKET
+
+    arguments = intent.review_call_arguments()
+    assert arguments["type"] == "market"
+    assert arguments["dollar_amount"] == "100.00"
+    assert arguments["market_hours"] == "regular_hours"
+    # A fractional quantity on a limit order is exactly what gets rejected.
+    assert "quantity" not in arguments
+    assert "limit_price" not in arguments
+
+
+def test_affordable_order_uses_whole_share_limit(tmp_path: Path) -> None:
+    config = load_config(write_config(tmp_path))
+    engine = Engine(config)
+
+    quote = Quote("HOOD", 93.28, NOW, bid=93.20, ask=93.35)
+    result = engine.plan({"HOOD": quote}, today=TODAY, now=NOW)
+
+    intent = result.actionable[0]
+    assert intent.execution_style is ExecutionStyle.WHOLE_SHARE_LIMIT
+
+    arguments = intent.review_call_arguments()
+    assert arguments["type"] == "limit"
+    assert arguments["quantity"] == "1"
+    assert float(arguments["limit_price"]) > 93.28
+    assert "dollar_amount" not in arguments
+
+
+def test_whole_share_quantity_is_never_fractional(tmp_path: Path) -> None:
+    """Whatever the budget, a limit order's quantity must be an integer."""
+    config = load_config(write_config(tmp_path))
+    engine = Engine(config)
+
+    result = engine.plan(
+        {"HOOD": Quote("HOOD", 93.28, NOW, bid=93.20, ask=93.35)}, today=TODAY, now=NOW
+    )
+    quantity = result.actionable[0].review_call_arguments()["quantity"]
+    assert float(quantity).is_integer()
+
+
+def test_fractional_blocked_when_not_opted_in(tmp_path: Path) -> None:
+    text = ETF_CONFIG.replace("allow_fractional = true", "allow_fractional = false")
+    config = load_config(write_config(tmp_path, text))
+    engine = Engine(config)
+
+    quote = Quote("VOO", 710.57, NOW, bid=710.52, ask=711.00)
+    result = engine.plan({"VOO": quote}, today=TODAY, now=NOW)
+
+    assert not result.actionable
+    assert any("fractional_allowed" in b for i in result.blocked for b in i.blocked_by)
+
+
+def test_intent_round_trips_execution_style(tmp_path: Path) -> None:
+    intent = make_intent(
+        execution_style=ExecutionStyle.NOTIONAL_MARKET, bid_price=710.52, ask_price=711.0
+    )
+    restored = OrderIntent.from_dict(intent.to_dict())
+    assert restored.execution_style is ExecutionStyle.NOTIONAL_MARKET
+    assert restored.bid_price == pytest.approx(710.52)
 
 
 def test_quote_must_carry_a_timestamp(tmp_path: Path) -> None:

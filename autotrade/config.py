@@ -67,6 +67,12 @@ class RiskLimits:
     max_quote_age_seconds: int = 300
     limit_offset_bps: float = 10.0
     require_confirmation: bool = True
+    # Buying less than one share forces a market order (the broker allows
+    # fractional only on type=market). Off by default: giving up price
+    # protection should be an explicit choice, not a silent fallback.
+    allow_fractional: bool = False
+    # Only applies to market orders, which have no price cap of their own.
+    max_spread_bps: float = 25.0
 
     def __post_init__(self) -> None:
         positive_fields = {
@@ -103,6 +109,10 @@ class RiskLimits:
             raise ConfigError(
                 f"limits.max_orders_per_day ({self.max_orders_per_day}) exceeds the hard "
                 f"ceiling of {ABSOLUTE_MAX_ORDERS_PER_DAY}."
+            )
+        if not 0 < self.max_spread_bps <= 1000:
+            raise ConfigError(
+                f"limits.max_spread_bps must be between 0 and 1000, got {self.max_spread_bps}"
             )
         if self.max_notional_per_order > self.max_notional_per_day:
             raise ConfigError(
@@ -244,6 +254,8 @@ def load_config(path: str | Path) -> AutotradeConfig:
             "max_quote_age_seconds",
             "limit_offset_bps",
             "require_confirmation",
+            "allow_fractional",
+            "max_spread_bps",
         },
         "[limits]",
     )

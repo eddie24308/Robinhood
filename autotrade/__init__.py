@@ -33,7 +33,7 @@ from autotrade.config import (
 from autotrade.engine import Engine, PlanResult
 from autotrade.errors import AutotradeError, ConfigError, EngineError
 from autotrade.guards import GuardOutcome, GuardViolation, RiskGuard
-from autotrade.intents import IntentStatus, OrderIntent
+from autotrade.intents import ExecutionStyle, IntentStatus, OrderIntent
 from autotrade.ledger import Ledger
 from autotrade.rules import RULE_TYPES, RuleEvaluation, evaluate_rule
 
@@ -47,6 +47,7 @@ __all__ = [
     "Engine",
     "GuardOutcome",
     "GuardViolation",
+    "ExecutionStyle",
     "IntentStatus",
     "Ledger",
     "OrderIntent",

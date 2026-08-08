@@ -89,6 +89,8 @@ blocked, so you find out the cap was hit.
 | `allowlist` | symbol not explicitly listed |
 | `price_sanity` | non-positive price, or limit above the configured offset |
 | `quote_freshness` | quote older than `max_quote_age_seconds`, missing, or in the future |
+| `fractional_allowed` | order is sub-share (forcing a market order) without `allow_fractional` |
+| `spread` | market order when bid-ask exceeds `max_spread_bps`, or bid/ask missing |
 | `per_order_notional` | order above `max_notional_per_order` |
 | `daily_notional` | today's committed total would exceed the daily cap |
 | `daily_order_count` | already at `max_orders_per_day` |
@@ -103,6 +105,27 @@ cap leave the third blocked, not all three approved.
 Two ceilings in `autotrade/config.py` cannot be raised from the config at all —
 $5,000/order and $10,000/day. Changing those requires editing the source, which
 is a deliberate speed bump.
+
+## Order types, and why it is not always a limit order
+
+Robinhood permits fractional shares **only** on `type=market` with a
+`dollar_amount`. A limit order must carry an integer quantity. So the order
+size decides the order type, and `autotrade` picks it rather than defaulting:
+
+| Situation | Style | What gets sent |
+|---|---|---|
+| Order affords ≥ 1 whole share | `whole_share_limit` | `type=limit`, integer `quantity`, `limit_price` |
+| Order is smaller than 1 share | `notional_market` | `type=market`, `dollar_amount` |
+
+A $25 buy of a $380 ETF is always the second row. That trades away price
+protection, which is why two guards exist to compensate:
+
+- `allow_fractional` must be explicitly set — the trade-off is opted into,
+  never defaulted into.
+- `max_spread_bps` blocks a market order into a wide book. This is not
+  theoretical: on its first contact with a live quote it blocked a VTI order
+  whose after-hours bid was $309.83 against a $381.74 last trade — a 2,096 bps
+  spread. During regular hours the same book is 1-3 bps.
 
 ## Rules
 

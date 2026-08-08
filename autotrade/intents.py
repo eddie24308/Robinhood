@@ -21,6 +21,30 @@ from enum import Enum
 from typing import Any
 
 
+class ExecutionStyle(str, Enum):
+    """How an intent must be expressed as a Robinhood order.
+
+    The broker's rules force this choice; it is not a preference:
+
+    ``NOTIONAL_MARKET``
+        ``type=market`` + ``dollar_amount``. The *only* way to buy a fractional
+        share. Required whenever the order size is less than one share, which
+        for a $100 buy of a $710 ETF is always. Costs price protection: a
+        market order has no cap, so the spread guard compensates.
+
+    ``WHOLE_SHARE_LIMIT``
+        ``type=limit`` + integer ``quantity``. Keeps price protection but can
+        only be used when the order affords at least one whole share, and it
+        rounds down — leaving part of the budget unspent.
+
+    Emitting a fractional quantity on a limit order is rejected by the broker,
+    so the engine must pick correctly rather than defaulting.
+    """
+
+    NOTIONAL_MARKET = "notional_market"
+    WHOLE_SHARE_LIMIT = "whole_share_limit"
+
+
 class IntentStatus(str, Enum):
     """Where an intent stands.
 
@@ -56,20 +80,56 @@ class OrderIntent:
     rule_id: str
     rule_reason: str
     status: IntentStatus
+    execution_style: ExecutionStyle = ExecutionStyle.NOTIONAL_MARKET
+    bid_price: float | None = None
+    ask_price: float | None = None
     guards_passed: list[str] = field(default_factory=list)
     blocked_by: list[str] = field(default_factory=list)
     detail: dict[str, Any] = field(default_factory=dict)
 
     @property
-    def estimated_shares(self) -> float:
+    def is_fractional(self) -> bool:
+        return self.execution_style == ExecutionStyle.NOTIONAL_MARKET
+
+    @property
+    def whole_shares(self) -> int:
+        """Whole shares affordable at the limit price (limit style only)."""
         if self.limit_price <= 0:
+            return 0
+        return int(self.amount_usd // self.limit_price)
+
+    @property
+    def estimated_shares(self) -> float:
+        if self.execution_style == ExecutionStyle.WHOLE_SHARE_LIMIT:
+            return float(self.whole_shares)
+        if self.reference_price <= 0:
             return 0.0
-        return self.amount_usd / self.limit_price
+        return self.amount_usd / self.reference_price
 
     @property
     def estimated_cost(self) -> float:
-        """Worst-case cost if the limit fills at its limit price."""
-        return self.estimated_shares * self.limit_price
+        """Worst-case cost.
+
+        For a whole-share limit that is shares x limit price. For a notional
+        market order the broker spends exactly the dollar amount, so the
+        notional *is* the cost — the uncertainty is in the share count, not
+        the spend.
+        """
+        if self.execution_style == ExecutionStyle.WHOLE_SHARE_LIMIT:
+            return self.whole_shares * self.limit_price
+        return self.amount_usd
+
+    @property
+    def spread_bps(self) -> float | None:
+        """Bid-ask spread in basis points, if both sides are known."""
+        if not self.bid_price or not self.ask_price or self.ask_price <= 0:
+            return None
+        if self.bid_price <= 0 or self.ask_price < self.bid_price:
+            return None
+        midpoint = (self.bid_price + self.ask_price) / 2.0
+        if midpoint <= 0:
+            return None
+        return (self.ask_price - self.bid_price) / midpoint * 10_000.0
 
     @property
     def is_actionable(self) -> bool:
@@ -89,7 +149,11 @@ class OrderIntent:
         data["created_at"] = self.created_at.isoformat()
         data["trade_date"] = self.trade_date.isoformat()
         data["status"] = self.status.value
+        data["execution_style"] = self.execution_style.value
         data["estimated_shares"] = round(self.estimated_shares, 6)
+        data["spread_bps"] = (
+            round(self.spread_bps, 2) if self.spread_bps is not None else None
+        )
         data["estimated_cost"] = round(self.estimated_cost, 2)
         data["fingerprint"] = self.fingerprint()
         return data
@@ -97,11 +161,14 @@ class OrderIntent:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> OrderIntent:
         data = dict(data)
-        for derived in ("estimated_shares", "estimated_cost", "fingerprint"):
+        for derived in ("estimated_shares", "estimated_cost", "fingerprint", "spread_bps"):
             data.pop(derived, None)
         data["created_at"] = datetime.fromisoformat(data["created_at"])
         data["trade_date"] = date.fromisoformat(data["trade_date"])
         data["status"] = IntentStatus(data["status"])
+        data["execution_style"] = ExecutionStyle(
+            data.get("execution_style", ExecutionStyle.NOTIONAL_MARKET.value)
+        )
         return cls(**data)
 
     def review_call_arguments(self) -> dict[str, Any]:
@@ -115,15 +182,33 @@ class OrderIntent:
             raise ValueError(
                 f"intent {self.intent_id} is {self.status.value}, not ready for review"
             )
-        return {
+
+        base = {
             "account_number": self.account_number,
             "symbol": self.symbol,
             "side": self.side,
-            "type": self.order_type,
-            "quantity": f"{self.estimated_shares:.6f}",
-            "limit_price": f"{self.limit_price:.2f}",
             "time_in_force": self.time_in_force,
+            # Fractional and dollar-based orders are regular-hours only, and a
+            # market order outside regular hours does not execute at all.
             "market_hours": "regular_hours",
+        }
+
+        if self.execution_style == ExecutionStyle.NOTIONAL_MARKET:
+            # dollar_amount is only valid with type=market, and is the only
+            # route to a fractional share.
+            return {**base, "type": "market", "dollar_amount": f"{self.amount_usd:.2f}"}
+
+        if self.whole_shares < 1:
+            raise ValueError(
+                f"intent {self.intent_id} is a whole-share limit order but "
+                f"${self.amount_usd:.2f} does not afford one share at "
+                f"{self.limit_price:.2f}"
+            )
+        return {
+            **base,
+            "type": "limit",
+            "quantity": str(self.whole_shares),
+            "limit_price": f"{self.limit_price:.2f}",
         }
 
     def summary_line(self) -> str:
@@ -133,10 +218,14 @@ class OrderIntent:
             IntentStatus.PAPER_FILLED: "PAPER",
         }.get(self.status, self.status.value.upper())
 
+        if self.execution_style == ExecutionStyle.NOTIONAL_MARKET:
+            pricing = f"~{self.estimated_shares:.4f}sh @ market (fractional)"
+        else:
+            pricing = f"{self.whole_shares}sh @ limit {self.limit_price:.2f}"
+
         base = (
             f"[{marker:7s}] {self.symbol:6s} buy ${self.amount_usd:,.2f} "
-            f"~{self.estimated_shares:.4f}sh @ limit {self.limit_price:.2f}  "
-            f"(rule: {self.rule_id})"
+            f"{pricing}  (rule: {self.rule_id})"
         )
         if self.blocked_by:
             base += f"\n            blocked by: {'; '.join(self.blocked_by)}"

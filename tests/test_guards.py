@@ -13,7 +13,7 @@ import pytest
 
 from autotrade.config import RiskLimits
 from autotrade.guards import PortfolioState, RiskGuard, apply_guards
-from autotrade.intents import IntentStatus, OrderIntent
+from autotrade.intents import ExecutionStyle, IntentStatus, OrderIntent
 
 NOW = datetime(2026, 8, 10, 15, 0, tzinfo=timezone.utc)
 TODAY = date(2026, 8, 10)
@@ -51,6 +51,11 @@ def make_intent(**overrides) -> OrderIntent:
         rule_id="r1",
         rule_reason="test",
         status=IntentStatus.READY_FOR_REVIEW,
+        # $100 affords a whole share of HOOD at ~93, so the engine would pick
+        # the limit style here. Fractional cases are covered explicitly below.
+        execution_style=ExecutionStyle.WHOLE_SHARE_LIMIT,
+        bid_price=93.20,
+        ask_price=93.35,
         detail={"quote_time": NOW.isoformat()},
     )
     base.update(overrides)
@@ -170,6 +175,59 @@ def test_stale_plan_date_is_blocked() -> None:
     outcome = check(make_intent(trade_date=date(2026, 8, 3)))
     assert not outcome.allowed
     assert any("trade_date" in message for message in outcome.messages())
+
+
+def fractional_intent(**overrides) -> OrderIntent:
+    """A $100 buy of a $710 ETF — necessarily fractional, hence market."""
+    base = dict(
+        symbol="VOO",
+        amount_usd=100.0,
+        reference_price=710.57,
+        order_type="market",
+        limit_price=711.28,
+        execution_style=ExecutionStyle.NOTIONAL_MARKET,
+        bid_price=710.52,
+        ask_price=711.00,
+    )
+    base.update(overrides)
+    return make_intent(**base)
+
+
+def test_fractional_blocked_unless_explicitly_allowed() -> None:
+    """Giving up price protection must be opted into, not defaulted into."""
+    outcome = check(fractional_intent(), limits=make_limits(allow_fractional=False))
+    assert not outcome.allowed
+    assert any("fractional_allowed" in message for message in outcome.messages())
+
+
+def test_fractional_passes_when_allowed() -> None:
+    outcome = check(fractional_intent(), limits=make_limits(allow_fractional=True))
+    assert outcome.allowed, outcome.messages()
+
+
+def test_wide_spread_blocks_market_order() -> None:
+    outcome = check(
+        fractional_intent(bid_price=700.00, ask_price=720.00),
+        limits=make_limits(allow_fractional=True, max_spread_bps=25.0),
+    )
+    assert not outcome.allowed
+    assert any("spread" in message for message in outcome.messages())
+
+
+def test_missing_bid_ask_blocks_market_order() -> None:
+    """Fail closed: an unpriceable book is not a tradable one."""
+    outcome = check(
+        fractional_intent(bid_price=None, ask_price=None),
+        limits=make_limits(allow_fractional=True),
+    )
+    assert not outcome.allowed
+    assert any("spread" in message for message in outcome.messages())
+
+
+def test_spread_guard_does_not_apply_to_limit_orders() -> None:
+    """A limit order carries its own cap, so a wide spread is not fatal."""
+    outcome = check(make_intent(bid_price=90.0, ask_price=97.0))
+    assert outcome.allowed, outcome.messages()
 
 
 def test_all_violations_are_reported_not_just_the_first() -> None:

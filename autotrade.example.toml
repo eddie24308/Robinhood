@@ -23,8 +23,9 @@ mode = "paper"
 # after watching the system behave. autotrade/config.py refuses values above
 # its own ceilings ($5,000/order, $10,000/day, 20 orders/day) regardless.
 max_notional_per_order = 25.0
-max_notional_per_day = 25.0
-max_orders_per_day = 1
+# Room for the weekly buy plus one dip buy on the same day, and no more.
+max_notional_per_day = 50.0
+max_orders_per_day = 2
 
 # At $25/week this allows roughly four years of accumulation before it blocks.
 # It WILL eventually block — that is intended, so the position cannot grow
@@ -74,3 +75,21 @@ cooldown_days = 6
 note = """Total US market DCA. Needs no forecasting skill to be sound: it does \
 not depend on any single company surviving, because the index replaces \
 failures automatically."""
+
+
+# Supplements the weekly buy — it does not replace it. Waiting for lows means
+# not buying at all for long stretches, and time out of a rising market has
+# historically cost more than the discount earned by waiting. This adds a
+# second $25 on genuinely weak days and is silent otherwise.
+#
+# Reality check: on 2026-08-07 VTI was $381.74, some 6.6% ABOVE its 60-day low
+# of $358.04, so this rule fires nothing today. That is the normal state.
+[[rules]]
+id = "vti-dip"
+symbol = "VTI"
+condition = "near_period_low"
+threshold = 2.0        # within 2% of the low
+lookback_days = 60
+amount_usd = 25.0
+cooldown_days = 5
+note = "Extra buy when price is near a 60-day low."

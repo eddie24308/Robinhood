@@ -138,11 +138,29 @@ python -m autotrade rules      # list conditions
 | `price_below` / `price_above` | price crosses `threshold` |
 | `drawdown_from_high` | price is `threshold`% below the `lookback_days` high |
 | `rally_from_low` | price is `threshold`% above the `lookback_days` low |
+| `near_period_low` | price is within `threshold`% of the `lookback_days` low |
 | `weekly_schedule` | it is `weekday` (plain DCA) |
 | `every_run` | always, throttled by `cooldown_days` |
 
 `cooldown_days` is checked *before* the condition, so a rule that fired
 yesterday cannot fire again today no matter what the price does.
+
+### On "buy at the lowest"
+
+`near_period_low` is the implementable version of that idea. You cannot know a
+price is *the* low until well after the fact — the bottom is only visible in
+hindsight. What is knowable in real time is that price sits at or near the
+lowest point of a defined window.
+
+Know what it does when it fires: a fresh N-day low usually means a downtrend,
+so it buys into falling prices and will often be underwater shortly after.
+That is the strategy, not a bug. But it is why the shipped config runs it
+*alongside* the weekly buy rather than instead of it — a dip-only rule spends
+most of its time not buying, and time out of a rising market has historically
+cost more than the discount earned by waiting.
+
+As of 2026-08-07, VTI at $381.74 sat 6.6% above its 60-day low of $358.04, so
+the dip rule was silent. That is its normal state.
 
 **Only buys are automated.** `action = "sell"` is rejected at config load.
 Exits deserve a human looking at them, and an automated stop-loss that fires

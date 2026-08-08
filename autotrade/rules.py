@@ -161,6 +161,69 @@ class _MoveFromExtreme:
 
 
 @dataclass(frozen=True)
+class _NearPeriodLow:
+    """Fires when price is within ``threshold`` percent of the trailing low.
+
+    This is the implementable version of "buy at the lowest". You cannot know a
+    price is *the* low until well after the fact — by definition the bottom is
+    only visible in hindsight. What is knowable in real time is that price is
+    at or near the lowest point of a defined window, which is what this checks.
+
+    Be aware of what it does when it fires: a fresh N-day low usually means a
+    downtrend, so this buys into falling prices and will often be underwater
+    shortly after. That is not a flaw — it is the strategy — but it is why this
+    works better as a *supplement* to regular buying than a replacement for it.
+    A rule that waits for lows spends most of its time not buying at all, and
+    time out of a rising market has historically cost more than the discount
+    earned by waiting.
+    """
+
+    description: str = "Fire when price is within N% of the trailing low"
+
+    def validate(self, rule: RuleConfig) -> None:
+        _require(
+            rule.threshold is not None and 0 <= rule.threshold < 100,
+            f"rule {rule.id!r}: `threshold` is the tolerance above the low, "
+            "as a percentage between 0 and 100",
+        )
+        _require(
+            rule.lookback_days is not None and rule.lookback_days > 1,
+            f"rule {rule.id!r}: `lookback_days` must be > 1",
+        )
+
+    def evaluate(self, rule: RuleConfig, context: MarketContext) -> RuleEvaluation:
+        lookback = int(rule.lookback_days)  # type: ignore[arg-type]
+        tolerance = float(rule.threshold)  # type: ignore[arg-type]
+
+        low = context.trailing_low(lookback)
+        if low is None or low <= 0:
+            return RuleEvaluation(
+                rule_id=rule.id,
+                fired=False,
+                reason=f"no price history for {context.symbol}; cannot evaluate",
+            )
+
+        trigger = low * (1.0 + tolerance / 100.0)
+        above_low_pct = (context.price / low - 1.0) * 100.0
+        fired = context.price <= trigger
+
+        return RuleEvaluation(
+            rule_id=rule.id,
+            fired=fired,
+            reason=(
+                f"{context.symbol} {context.price:.2f} is {above_low_pct:+.1f}% above the "
+                f"{lookback}-day low {low:.2f} (fires at or under {trigger:.2f})"
+            ),
+            detail={
+                "price": context.price,
+                "period_low": low,
+                "trigger": trigger,
+                "above_low_pct": above_low_pct,
+            },
+        )
+
+
+@dataclass(frozen=True)
 class _WeeklySchedule:
     """Fires on a given weekday — plain dollar-cost averaging."""
 
@@ -217,6 +280,7 @@ RULE_TYPES: dict[str, RuleType] = {
     "rally_from_low": _MoveFromExtreme(
         from_high=False, description="Fire after an N% rise from the trailing low"
     ),
+    "near_period_low": _NearPeriodLow(),
     "weekly_schedule": _WeeklySchedule(),
     "every_run": _EveryRun(),
 }

@@ -175,6 +175,55 @@ def test_drawdown_without_history_does_not_fire() -> None:
     assert "no price history" in evaluation.reason
 
 
+def test_near_period_low_fires_only_near_the_low() -> None:
+    # Trailing low of 358; 2% tolerance puts the trigger at 365.16.
+    history = pd.Series([380.0, 370.0, 358.0, 365.0, 381.0])
+    r = rule(condition="near_period_low", threshold=2.0, lookback_days=5)
+
+    assert evaluate_rule(r, context(362.0, history=history)).fired
+    assert evaluate_rule(r, context(358.0, history=history)).fired
+    assert not evaluate_rule(r, context(370.0, history=history)).fired
+
+
+def test_near_period_low_is_silent_at_a_high() -> None:
+    """The realistic case: VTI at a new high must not trigger a dip buy."""
+    history = pd.Series([358.04, 365.0, 372.0, 379.07])
+    r = rule(condition="near_period_low", threshold=2.0, lookback_days=60)
+
+    evaluation = evaluate_rule(r, context(381.74, history=history))
+    assert not evaluation.fired
+    assert "above the" in evaluation.reason
+
+
+def test_near_period_low_zero_tolerance_needs_the_actual_low() -> None:
+    history = pd.Series([380.0, 360.0, 370.0])
+    r = rule(condition="near_period_low", threshold=0.0, lookback_days=5)
+
+    assert evaluate_rule(r, context(360.0, history=history)).fired
+    assert not evaluate_rule(r, context(360.01, history=history)).fired
+
+
+def test_near_period_low_without_history_does_not_fire() -> None:
+    r = rule(condition="near_period_low", threshold=2.0, lookback_days=60)
+    evaluation = evaluate_rule(r, context(100.0, history=None))
+    assert not evaluation.fired
+    assert "no price history" in evaluation.reason
+
+
+def test_near_period_low_rejects_bad_threshold() -> None:
+    from autotrade.config import RuleConfig
+
+    with pytest.raises(ConfigError, match="tolerance above the low"):
+        RuleConfig(
+            id="bad",
+            symbol="VTI",
+            condition="near_period_low",
+            threshold=150.0,
+            lookback_days=60,
+            amount_usd=25.0,
+        )
+
+
 def test_weekly_schedule_fires_on_its_day() -> None:
     r = rule(condition="weekly_schedule", weekday="monday", threshold=None)
     assert evaluate_rule(r, context(93.0, today=date(2026, 8, 10))).fired  # Monday

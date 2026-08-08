@@ -1,0 +1,10 @@
+numpy>=1.26
+pandas>=2.1
+scikit-learn>=1.4
+scipy>=1.11
+
+# Optional: only needed for --provider yfinance
+# yfinance>=0.2.40
+
+# Development
+pytest>=8.0

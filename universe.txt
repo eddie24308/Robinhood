@@ -1,0 +1,29 @@
+# Example screening universe: one ticker per line, # for comments.
+#   python -m stockforecast screen --symbols-file universe.txt \
+#       --provider yfinance --start 2015-01-01
+#
+# Note: screening a large universe and keeping the best-looking result is the
+# easiest way to fool yourself. Read the q-value column, not the ranking.
+
+# Brokers / fintech
+HOOD
+SCHW
+IBKR
+COIN
+
+# Mega-cap tech
+AAPL
+MSFT
+NVDA
+GOOGL
+AMZN
+META
+
+# Financials
+JPM
+GS
+BAC
+
+# Broad-market reference
+SPY
+QQQ

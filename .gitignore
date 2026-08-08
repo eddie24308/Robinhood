@@ -1,0 +1,24 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Downloaded price data and run outputs. data/HOOD.csv is committed
+# deliberately as a sample and is force-added below.
+data/*.csv
+!data/HOOD.csv
+data/mcp/
+*.json
+!package.json
+
+.DS_Store
+.idea/
+.vscode/

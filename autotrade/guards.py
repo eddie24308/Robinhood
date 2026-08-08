@@ -154,16 +154,29 @@ class RiskGuard:
                 f"non-positive price (ref={intent.reference_price}, "
                 f"limit={intent.limit_price})",
             )
-        # A limit far above the reference means bad data or a bad offset, and
-        # would hand away money on a marketable order.
+
+        # The limit price is only sent to the broker on a limit order. A
+        # notional market order carries no price at all, so comparing its
+        # vestigial limit_price to the offset says nothing about the order that
+        # would actually be placed — the spread guard is what protects those.
+        if intent.execution_style != ExecutionStyle.WHOLE_SHARE_LIMIT:
+            return None
+
         drift = intent.limit_price / intent.reference_price - 1.0
         max_drift = self.limits.limit_offset_bps / 10_000.0
-        if drift > max_drift + 1e-9:
+
+        # Limit prices are quoted in whole cents, so rounding alone can push a
+        # correctly-computed limit a fraction over the offset. The effect is
+        # larger for cheaper shares: a half-cent is 0.006% of $87 but only
+        # 0.001% of $380. Allow exactly one cent of slack so a rounding artifact
+        # cannot masquerade as bad data.
+        tolerance = max_drift + 0.01 / intent.reference_price
+        if drift > tolerance:
             return GuardViolation(
                 "price_sanity",
-                f"limit {intent.limit_price:.2f} is {drift:.2%} above reference "
+                f"limit {intent.limit_price:.2f} is {drift:.3%} above reference "
                 f"{intent.reference_price:.2f}, exceeding the configured "
-                f"{max_drift:.2%} offset",
+                f"{max_drift:.2%} offset plus one cent of rounding slack",
             )
         return None
 

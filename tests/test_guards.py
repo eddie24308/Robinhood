@@ -158,6 +158,49 @@ def test_limit_far_above_reference_is_blocked() -> None:
     assert any("price_sanity" in message for message in outcome.messages())
 
 
+def fractional_intent(**overrides) -> OrderIntent:
+    """A $100 buy of a $710 ETF — necessarily fractional, hence market."""
+    base = dict(
+        symbol="VOO",
+        amount_usd=100.0,
+        reference_price=710.57,
+        order_type="market",
+        limit_price=711.28,
+        execution_style=ExecutionStyle.NOTIONAL_MARKET,
+        bid_price=710.52,
+        ask_price=711.00,
+    )
+    base.update(overrides)
+    return make_intent(**base)
+
+
+def test_cent_rounding_does_not_trip_price_sanity() -> None:
+    """Regression: VXUS at 87.21 with a 10 bps offset rounds to 87.30.
+
+    That is 0.103% above reference, a hair over the 0.10% offset purely from
+    quoting in whole cents. The guard must not read a rounding artifact as bad
+    data, or every cheap security gets blocked.
+    """
+    outcome = check(make_intent(reference_price=87.21, limit_price=87.30))
+    assert outcome.allowed, outcome.messages()
+
+
+def test_genuinely_bad_limit_still_blocked_on_cheap_shares() -> None:
+    """The cent of slack must not become a licence for a real overshoot."""
+    outcome = check(make_intent(reference_price=87.21, limit_price=88.50))
+    assert not outcome.allowed
+    assert any("price_sanity" in message for message in outcome.messages())
+
+
+def test_price_drift_not_checked_for_market_orders() -> None:
+    """A market order carries no limit price, so the field is meaningless there."""
+    outcome = check(
+        fractional_intent(reference_price=87.21, limit_price=999.0),
+        limits=make_limits(allow_fractional=True),
+    )
+    assert outcome.allowed, outcome.messages()
+
+
 def test_non_positive_price_is_blocked() -> None:
     outcome = check(make_intent(reference_price=0.0, limit_price=0.0))
     assert not outcome.allowed
@@ -175,22 +218,6 @@ def test_stale_plan_date_is_blocked() -> None:
     outcome = check(make_intent(trade_date=date(2026, 8, 3)))
     assert not outcome.allowed
     assert any("trade_date" in message for message in outcome.messages())
-
-
-def fractional_intent(**overrides) -> OrderIntent:
-    """A $100 buy of a $710 ETF — necessarily fractional, hence market."""
-    base = dict(
-        symbol="VOO",
-        amount_usd=100.0,
-        reference_price=710.57,
-        order_type="market",
-        limit_price=711.28,
-        execution_style=ExecutionStyle.NOTIONAL_MARKET,
-        bid_price=710.52,
-        ask_price=711.00,
-    )
-    base.update(overrides)
-    return make_intent(**base)
 
 
 def test_fractional_blocked_unless_explicitly_allowed() -> None:

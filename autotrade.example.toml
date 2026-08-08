@@ -15,16 +15,17 @@ number = "771654944"
 # "paper" simulates fills and can never place a real order.
 # "live" emits intents for the agent to review with you; it still cannot place
 # anything on its own.
-mode = "paper"
+mode = "paper"   # flip to "live" only when you mean it
 
 
 [limits]
 # Deliberately tight. Raising these is a one-line edit you make on purpose,
 # after watching the system behave. autotrade/config.py refuses values above
 # its own ceilings ($5,000/order, $10,000/day, 20 orders/day) regardless.
-max_notional_per_order = 25.0
-# Room for the weekly buy plus one dip buy on the same day, and no more.
-max_notional_per_day = 50.0
+# Sized to real buying power, not aspiration. The account held $30 when this
+# was written; a $15 + $10 weekly pair fits, a $25 + $25 pair does not.
+max_notional_per_order = 15.0
+max_notional_per_day = 25.0
 max_orders_per_day = 2
 
 # At $25/week this allows roughly four years of accumulation before it blocks.
@@ -37,7 +38,7 @@ max_position_notional_per_symbol = 5000.0
 daily_loss_limit = 200.0
 
 # Nothing outside this list can be bought, whatever the rules say.
-allowlist = ["VTI"]
+allowlist = ["VTI", "VXUS"]
 
 # $25 buys 0.065 shares of a $380 ETF, so this must be true — the broker only
 # permits fractional shares on type=market with a dollar_amount. That gives up
@@ -69,7 +70,7 @@ id = "vti-weekly"
 symbol = "VTI"
 condition = "weekly_schedule"
 weekday = "monday"
-amount_usd = 25.0
+amount_usd = 15.0
 # 6 days keeps this to once per week even if `plan` runs every day.
 cooldown_days = 6
 note = """Total US market DCA. Needs no forecasting skill to be sound: it does \
@@ -84,12 +85,29 @@ failures automatically."""
 #
 # Reality check: on 2026-08-07 VTI was $381.74, some 6.6% ABOVE its 60-day low
 # of $358.04, so this rule fires nothing today. That is the normal state.
+# International ex-US. VTI holds zero of it, and roughly 40% of world market
+# cap sits outside the United States, so this is the single largest gap in a
+# VTI-only portfolio. The 15/10 split is close to global market-cap weight.
+[[rules]]
+id = "vxus-weekly"
+symbol = "VXUS"
+condition = "weekly_schedule"
+weekday = "monday"
+amount_usd = 10.0
+cooldown_days = 6
+note = "International developed + emerging markets."
+
+
+# DISABLED while buying power is $30. Re-enable once the account is funded
+# enough to absorb an extra buy without starving the weekly ones — otherwise a
+# dip day consumes the cash the scheduled buys need.
 [[rules]]
 id = "vti-dip"
 symbol = "VTI"
 condition = "near_period_low"
 threshold = 2.0        # within 2% of the low
 lookback_days = 60
-amount_usd = 25.0
+amount_usd = 15.0
 cooldown_days = 5
+enabled = false
 note = "Extra buy when price is near a 60-day low."

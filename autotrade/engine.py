@@ -15,6 +15,7 @@ a human, and act — which is the point.
 from __future__ import annotations
 
 import json
+import math
 import uuid
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
@@ -221,7 +222,10 @@ class Engine:
         # Marketable limit: priced slightly through the reference so it fills
         # promptly, but never at an unbounded market price.
         offset = self.config.limits.limit_offset_bps / 10_000.0
-        limit_price = round(quote.price * (1.0 + offset), 2)
+        # Floor to the cent rather than rounding. On a buy, rounding up would
+        # push the limit past the offset the user configured; flooring keeps it
+        # at or under, costing at most a cent of fill probability.
+        limit_price = math.floor(quote.price * (1.0 + offset) * 100.0) / 100.0
 
         # A limit order needs at least one whole share; anything smaller can
         # only be expressed as a fractional market order.

@@ -117,12 +117,17 @@ deposit was still pending. Cash you cannot spend is not funding.
 
 ### Scheduling it
 
-A Routine (`create_trigger`) can wake this session on a cron. **Known limitation:**
-Routines created from inside a session do not carry MCP connectors, so the fired
-session may come up without the `mcp__Robinhood__*` tools and be unable to fetch
-quotes or place orders. If that happens the run reports the shortfall rather than
-trading, and the buy has to be run manually. Creating the Routine from the
-claude.ai Routines UI is the documented way to attach connectors.
+A Routine (`create_trigger`) wakes this session on a cron. Creating one from
+inside a session returns a warning that it stores no MCP connectors — but when the
+Routine binds to a **persistent session** (the default), the fired turn runs inside
+that session and reaches its connectors normally. Verified live on 2026-08-10: the
+weekly Routine fired and had full `mcp__Robinhood__*` access.
+
+The warning would matter for a Routine using `create_new_session_on_fire`, where
+each firing starts cold. Keep the weekly buy bound to a persistent session.
+
+The Routine's first instruction is still to check for broker tools and report
+honestly rather than pretend, because a connector can drop at any time.
 
 ## Kill switch
 

@@ -124,7 +124,9 @@ def command_plan(args: argparse.Namespace) -> int:
         quotes = load_quotes(args.quotes)
 
     today = date.fromisoformat(args.date) if args.date else None
-    result = engine.plan(quotes, history=history, today=today)
+    result = engine.plan(
+        quotes, history=history, today=today, buying_power=args.buying_power
+    )
     _print_plan(result, config)
 
     if result.actionable and config.account.is_live:
@@ -149,7 +151,9 @@ def command_run(args: argparse.Namespace) -> int:
     quotes = quotes_from_history(history) if args.from_csv else load_quotes(args.quotes)
 
     today = date.fromisoformat(args.date) if args.date else None
-    result = engine.plan(quotes, history=history, today=today)
+    result = engine.plan(
+        quotes, history=history, today=today, buying_power=args.buying_power
+    )
     _print_plan(result, config)
 
     fills = engine.execute_paper(result)
@@ -340,6 +344,15 @@ def build_parser() -> argparse.ArgumentParser:
             help="price off stored data/<SYMBOL>.csv closes (paper only)",
         )
         sub.add_argument("--date", help="override the trade date, YYYY-MM-DD")
+        sub.add_argument(
+            "--buying-power",
+            type=float,
+            default=None,
+            help=(
+                "broker's spendable buying power (NOT account cash). When given, "
+                "intents are funded in rule order and unaffordable ones are blocked"
+            ),
+        )
         sub.add_argument("--out", help="where to write intents.json (live mode)")
         sub.set_defaults(func=handler)
 

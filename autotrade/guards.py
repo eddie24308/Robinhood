@@ -64,6 +64,13 @@ class PortfolioState:
     realized_pnl_today: float = 0.0
     positions_notional: dict[str, float] = field(default_factory=dict)
     fingerprints_today: set[str] = field(default_factory=set)
+    # Spendable cash as the broker reports it. NOT the same as account cash —
+    # a pending deposit shows as cash while contributing nothing here. None
+    # means "not supplied" and the check is skipped: paper runs have no broker,
+    # and in live mode review_equity_order is the authoritative gate anyway.
+    # This guard exists to avoid proposing orders that cannot be funded, and to
+    # let a partially-funded day buy what it can afford instead of nothing.
+    available_buying_power: float | None = None
 
     def position_for(self, symbol: str) -> float:
         return self.positions_notional.get(symbol.upper(), 0.0)
@@ -97,6 +104,7 @@ class RiskGuard:
             self._check_per_order_notional,
             self._check_daily_notional,
             self._check_daily_order_count,
+            self._check_buying_power,
             self._check_position_cap,
             self._check_daily_loss_limit,
             self._check_duplicate,
@@ -296,6 +304,26 @@ class RiskGuard:
             )
         return None
 
+    def _check_buying_power(
+        self, intent: OrderIntent, state: PortfolioState, now: datetime
+    ) -> GuardViolation | None:
+        """Block an intent the account cannot actually pay for.
+
+        Skipped when buying power was not supplied. When it was, intents are
+        funded in order, so a partially-funded day fills the earlier rules and
+        blocks the rest rather than failing the whole batch.
+        """
+        if state.available_buying_power is None:
+            return None
+        if intent.amount_usd > state.available_buying_power + 1e-9:
+            return GuardViolation(
+                "buying_power",
+                f"${intent.amount_usd:,.2f} exceeds the ${state.available_buying_power:,.2f} "
+                "of buying power still unspent. Account cash can be higher than this - "
+                "a pending deposit is not spendable.",
+            )
+        return None
+
     def _check_position_cap(
         self, intent: OrderIntent, state: PortfolioState, now: datetime
     ) -> GuardViolation | None:
@@ -365,6 +393,7 @@ def apply_guards(
         realized_pnl_today=state.realized_pnl_today,
         positions_notional=dict(state.positions_notional),
         fingerprints_today=set(state.fingerprints_today),
+        available_buying_power=state.available_buying_power,
     )
 
     for intent in intents:
@@ -381,6 +410,8 @@ def apply_guards(
                 running.positions_notional.get(symbol, 0.0) + intent.amount_usd
             )
             running.fingerprints_today.add(intent.fingerprint())
+            if running.available_buying_power is not None:
+                running.available_buying_power -= intent.amount_usd
         else:
             intent.status = IntentStatus.BLOCKED
 

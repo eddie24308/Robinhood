@@ -323,3 +323,71 @@ def test_blocked_intent_refuses_to_produce_review_arguments() -> None:
 
     with pytest.raises(ValueError, match="not ready for review"):
         intent.review_call_arguments()
+
+
+# --- buying power / partial funding -------------------------------------------
+
+
+def test_buying_power_not_supplied_is_skipped() -> None:
+    """Paper runs have no broker; the check is a pre-filter, not the gate."""
+    outcome = check(make_intent(), state=make_state(available_buying_power=None))
+    assert outcome.allowed, outcome.messages()
+
+
+def test_unfundable_intent_is_blocked() -> None:
+    outcome = check(
+        make_intent(amount_usd=15.0), state=make_state(available_buying_power=0.0)
+    )
+    assert not outcome.allowed
+    assert any("buying_power" in message for message in outcome.messages())
+
+
+def test_exactly_affordable_intent_passes() -> None:
+    outcome = check(
+        make_intent(amount_usd=15.0), state=make_state(available_buying_power=15.0)
+    )
+    assert outcome.allowed, outcome.messages()
+
+
+def test_partial_funding_buys_what_it_can_afford() -> None:
+    """The point of the guard: $18 available funds the $15, not the $10 after it."""
+    limits = make_limits(max_orders_per_day=10, max_notional_per_day=1000.0)
+    intents = [
+        make_intent(intent_id="a", rule_id="vti",  amount_usd=15.0),
+        make_intent(intent_id="b", rule_id="vxus", amount_usd=10.0),
+    ]
+
+    result = apply_guards(
+        intents, limits, make_state(available_buying_power=18.0), now=NOW
+    )
+
+    assert result[0].status == IntentStatus.READY_FOR_REVIEW
+    assert result[1].status == IntentStatus.BLOCKED
+    assert any("buying_power" in m for m in result[1].blocked_by)
+
+
+def test_full_funding_buys_everything() -> None:
+    limits = make_limits(max_orders_per_day=10, max_notional_per_day=1000.0)
+    intents = [
+        make_intent(intent_id="a", rule_id="vti",  amount_usd=15.0),
+        make_intent(intent_id="b", rule_id="vxus", amount_usd=10.0),
+    ]
+
+    result = apply_guards(
+        intents, limits, make_state(available_buying_power=25.0), now=NOW
+    )
+    assert all(i.status == IntentStatus.READY_FOR_REVIEW for i in result)
+
+
+def test_zero_buying_power_blocks_the_whole_batch() -> None:
+    """Today's actual situation: $80 of cash, none of it spendable."""
+    limits = make_limits(max_orders_per_day=10, max_notional_per_day=1000.0)
+    intents = [
+        make_intent(intent_id="a", rule_id="vti",  amount_usd=15.0),
+        make_intent(intent_id="b", rule_id="vxus", amount_usd=10.0),
+    ]
+
+    result = apply_guards(
+        intents, limits, make_state(available_buying_power=0.0), now=NOW
+    )
+    assert all(i.status == IntentStatus.BLOCKED for i in result)

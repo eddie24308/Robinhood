@@ -105,6 +105,16 @@ Every machine guard still runs: allowlist, per-order and daily caps, order count
 position cap, spread, quote staleness, duplicate, kill switch. What is gone is the
 person. A bug, a bad quote, or a misread rule moves money before anyone looks.
 
+### Partial funding
+
+Pass `--buying-power <n>` and intents are funded in rule order: what fits is
+proposed, what does not is blocked with a `buying_power` violation. A day with $18
+against a $15 + $10 plan buys the $15 and blocks the $10, rather than failing both.
+
+Use the broker's `buying_power`, **never the `cash` field**. They differ: on
+2026-08-10 the account showed $80 cash and $0.00 buying power, because a $50
+deposit was still pending. Cash you cannot spend is not funding.
+
 ### Scheduling it
 
 A Routine (`create_trigger`) can wake this session on a cron. **Known limitation:**
@@ -143,6 +153,7 @@ blocked, so you find out the cap was hit.
 | `per_order_notional` | order above `max_notional_per_order` |
 | `daily_notional` | today's committed total would exceed the daily cap |
 | `daily_order_count` | already at `max_orders_per_day` |
+| `buying_power` | order exceeds spendable buying power (skipped when not supplied) |
 | `position_cap` | symbol position would exceed its cap |
 | `daily_loss_limit` | realised losses today at or past the stop |
 | `duplicate` | identical intent already proposed today |

@@ -146,8 +146,15 @@ class Engine:
         history: dict[str, pd.DataFrame] | None = None,
         today: date | None = None,
         now: datetime | None = None,
+        buying_power: float | None = None,
     ) -> PlanResult:
-        """Evaluate every enabled rule and return guarded intents."""
+        """Evaluate every enabled rule and return guarded intents.
+
+        ``buying_power`` is the broker's spendable figure, not account cash — a
+        pending deposit inflates cash while contributing nothing spendable. When
+        supplied, intents are funded in rule order, so a partially funded day
+        buys what it can afford instead of nothing.
+        """
         now = now or datetime.now(timezone.utc)
         today = today or now.date()
         history = history or {}
@@ -160,7 +167,11 @@ class Engine:
             )
 
         state = self.ledger.state_for(today)
+        state.available_buying_power = buying_power
         last_fired = self.ledger.last_fired()
+
+        if buying_power is not None:
+            result.notes.append(f"buying power supplied: ${buying_power:,.2f}")
 
         proposals: list[OrderIntent] = []
         for rule in self.config.enabled_rules:

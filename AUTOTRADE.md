@@ -87,6 +87,33 @@ Then ask the agent to run the weekly buy. It will:
 Current state as of 2026-08-08: buying power $30, no positions. The plan spends
 $25, so week one fits and week two does not without a deposit.
 
+## Unattended execution
+
+`auto_execute` lets the agent place a guarded intent without asking first. It is
+off by default and turning it on takes two keys, not one:
+
+```toml
+require_confirmation = false
+auto_execute = true
+```
+
+Setting only the first is rejected at config load — the human gate can never come
+off by omission. A dedicated **$500/day ceiling** applies whenever `auto_execute`
+is on, independent of `max_notional_per_day`, and raising it needs a source edit.
+
+Every machine guard still runs: allowlist, per-order and daily caps, order count,
+position cap, spread, quote staleness, duplicate, kill switch. What is gone is the
+person. A bug, a bad quote, or a misread rule moves money before anyone looks.
+
+### Scheduling it
+
+A Routine (`create_trigger`) can wake this session on a cron. **Known limitation:**
+Routines created from inside a session do not carry MCP connectors, so the fired
+session may come up without the `mcp__Robinhood__*` tools and be unable to fetch
+quotes or place orders. If that happens the run reports the shortfall rather than
+trading, and the buy has to be run manually. Creating the Routine from the
+claude.ai Routines UI is the documented way to attach connectors.
+
 ## Kill switch
 
 ```bash

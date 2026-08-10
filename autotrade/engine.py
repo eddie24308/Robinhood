@@ -293,6 +293,7 @@ class Engine:
             "account_number": self.config.account.number,
             "mode": self.config.account.mode,
             "requires_confirmation": self.config.limits.require_confirmation,
+            "auto_execute": self.config.limits.auto_execute,
             "workflow": [
                 "1. For each intent, call review_equity_order with review_call_arguments.",
                 "2. Show the user the reviewed cost and every alert returned.",

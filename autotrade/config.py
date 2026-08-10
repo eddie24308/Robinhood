@@ -26,6 +26,12 @@ ABSOLUTE_MAX_NOTIONAL_PER_ORDER = 5_000.0
 ABSOLUTE_MAX_NOTIONAL_PER_DAY = 10_000.0
 ABSOLUTE_MAX_ORDERS_PER_DAY = 20
 
+# Unattended mode places orders with no human in the loop, so it gets its own,
+# much lower ceiling on top of everything else. Raising this requires editing
+# source, which is the point: the money that can move while nobody is watching
+# should be a decision someone made deliberately, not a config typo.
+ABSOLUTE_MAX_UNATTENDED_NOTIONAL_PER_DAY = 500.0
+
 VALID_MODES = ("paper", "live")
 
 
@@ -73,6 +79,11 @@ class RiskLimits:
     allow_fractional: bool = False
     # Only applies to market orders, which have no price cap of their own.
     max_spread_bps: float = 25.0
+    # Unattended live placement. Off unless explicitly turned on. When true,
+    # the agent may place a guarded intent without asking first — every other
+    # guard still applies, but the human gate is gone. The trade-off is real:
+    # a bug or bad data moves money before anyone looks at it.
+    auto_execute: bool = False
 
     def __post_init__(self) -> None:
         positive_fields = {
@@ -113,6 +124,12 @@ class RiskLimits:
         if not 0 < self.max_spread_bps <= 1000:
             raise ConfigError(
                 f"limits.max_spread_bps must be between 0 and 1000, got {self.max_spread_bps}"
+            )
+        if self.auto_execute and self.max_notional_per_day > ABSOLUTE_MAX_UNATTENDED_NOTIONAL_PER_DAY:
+            raise ConfigError(
+                f"limits.auto_execute is on with a daily cap of ${self.max_notional_per_day:,.2f}, "
+                f"over the ${ABSOLUTE_MAX_UNATTENDED_NOTIONAL_PER_DAY:,.2f} ceiling that applies "
+                "when no human reviews each order. Lower the daily cap or turn auto_execute off."
             )
         if self.max_notional_per_order > self.max_notional_per_day:
             raise ConfigError(
@@ -254,6 +271,7 @@ def load_config(path: str | Path) -> AutotradeConfig:
             "max_quote_age_seconds",
             "limit_offset_bps",
             "require_confirmation",
+            "auto_execute",
             "allow_fractional",
             "max_spread_bps",
         },
@@ -298,10 +316,16 @@ def load_config(path: str | Path) -> AutotradeConfig:
         state_dir=state_dir,
     )
 
-    if config.account.is_live and not config.limits.require_confirmation:
+    if (
+        config.account.is_live
+        and not config.limits.require_confirmation
+        and not config.limits.auto_execute
+    ):
         raise ConfigError(
             "refusing to load a config with mode='live' and require_confirmation=false. "
-            "Unattended live order placement is not a supported configuration."
+            "Unattended live placement requires limits.auto_execute = true, set "
+            "deliberately — turning off the human gate should never be something "
+            "that happens by omission."
         )
 
     return config

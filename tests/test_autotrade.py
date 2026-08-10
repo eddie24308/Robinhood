@@ -577,3 +577,73 @@ def test_autotrade_cannot_import_broker_tools() -> None:
             # never in an import or call position.
             assert f"import {token}" not in text, f"{module.name} imports {token}"
             assert f"{token}(" not in text, f"{module.name} calls {token}"
+
+
+# --- unattended execution -----------------------------------------------------
+
+AUTO_CONFIG = BASE_CONFIG.replace('mode = "paper"', 'mode = "live"').replace(
+    'allowlist = ["HOOD"]',
+    'allowlist = ["HOOD"]\nrequire_confirmation = false\nauto_execute = true',
+)
+
+
+def test_live_without_confirmation_needs_explicit_auto_execute(tmp_path: Path) -> None:
+    """Dropping the human gate must never happen by omission."""
+    text = BASE_CONFIG.replace('mode = "paper"', 'mode = "live"').replace(
+        'allowlist = ["HOOD"]', 'allowlist = ["HOOD"]\nrequire_confirmation = false'
+    )
+    with pytest.raises(ConfigError, match="auto_execute"):
+        load_config(write_config(tmp_path, text))
+
+
+def test_auto_execute_loads_when_set_deliberately(tmp_path: Path) -> None:
+    config = load_config(write_config(tmp_path, AUTO_CONFIG))
+    assert config.account.is_live
+    assert config.limits.auto_execute
+    assert not config.limits.require_confirmation
+
+
+def test_unattended_daily_cap_has_its_own_ceiling() -> None:
+    """A human-reviewed cap that is fine becomes too big with nobody watching."""
+    from autotrade.config import ABSOLUTE_MAX_UNATTENDED_NOTIONAL_PER_DAY
+
+    RiskLimits(max_notional_per_order=600.0, max_notional_per_day=1200.0, allowlist=("HOOD",))
+
+    with pytest.raises(ConfigError, match="no human reviews"):
+        RiskLimits(
+            max_notional_per_order=600.0,
+            max_notional_per_day=ABSOLUTE_MAX_UNATTENDED_NOTIONAL_PER_DAY + 1,
+            allowlist=("HOOD",),
+            auto_execute=True,
+        )
+
+
+def test_auto_execute_defaults_off(tmp_path: Path) -> None:
+    assert load_config(write_config(tmp_path)).limits.auto_execute is False
+
+
+def test_guards_still_apply_under_auto_execute(tmp_path: Path) -> None:
+    """Removing the human gate must not remove any machine gate."""
+    config = load_config(write_config(tmp_path, AUTO_CONFIG))
+    engine = Engine(config)
+
+    stale = Quote("HOOD", 93.0, NOW - timedelta(hours=3), bid=93.0, ask=93.1)
+    result = engine.plan({"HOOD": stale}, today=TODAY, now=NOW)
+
+    assert not result.actionable
+    assert any("quote_freshness" in b for i in result.blocked for b in i.blocked_by)
+
+
+def test_auto_execute_surfaced_in_emitted_intents(tmp_path: Path) -> None:
+    """Whoever consumes the intent file must be able to see the mode it ran in."""
+    config = load_config(write_config(tmp_path, AUTO_CONFIG))
+    engine = Engine(config)
+
+    result = engine.plan(
+        {"HOOD": Quote("HOOD", 93.0, NOW, bid=93.0, ask=93.1)}, today=TODAY, now=NOW
+    )
+    out = engine.emit_for_review(result, tmp_path / "intents.json")
+    payload = json.loads(out.read_text())
+
+    assert payload["auto_execute"] is True
+    assert payload["requires_confirmation"] is False

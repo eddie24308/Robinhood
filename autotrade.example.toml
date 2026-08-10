@@ -57,8 +57,20 @@ max_quote_age_seconds = 300
 # fractional, but it takes effect the moment an order affords a full share).
 limit_offset_bps = 10.0
 
-# Must stay true in live mode; config loading rejects live + false.
+# Must stay true in live mode unless auto_execute below is deliberately set.
 require_confirmation = true
+
+# Unattended live placement. OFF here on purpose — the shipped example must not
+# be a config that spends money unwatched. Turning it on means orders place with
+# no human looking at them; every machine guard still applies (allowlist, caps,
+# spread, staleness, duplicate, kill switch), but the human gate is gone, and a
+# bug or bad quote moves money before anyone can catch it.
+#
+# Turning it on requires setting require_confirmation = false AND auto_execute =
+# true together. Config loading rejects one without the other, so the gate can
+# never come off by omission. A separate $500/day ceiling applies in this mode
+# regardless of max_notional_per_day.
+auto_execute = false
 
 
 # --- Rules -------------------------------------------------------------------

@@ -67,6 +67,8 @@ def command_check(args: argparse.Namespace) -> int:
     print(f"  account            {config.account.masked()}  mode={config.account.mode.upper()}")
     if config.account.is_live:
         print("                     *** LIVE MODE - intents will be real orders ***")
+    if config.account.is_live and config.limits.auto_execute:
+        print("                     *** UNATTENDED - no human reviews each order ***")
     print(f"  kill switch        {'ACTIVE' if engine.kill_switch_active else 'inactive'}"
           f"  ({config.kill_switch_path})")
     print()
@@ -79,7 +81,9 @@ def command_check(args: argparse.Namespace) -> int:
     print(f"    daily loss stop  ${limits.daily_loss_limit:,.2f}")
     print(f"    max quote age    {limits.max_quote_age_seconds}s")
     print(f"    limit offset     {limits.limit_offset_bps:.0f} bps above reference")
-    print(f"    confirmation     {'REQUIRED' if limits.require_confirmation else 'not required'}")
+    print(f"    confirmation     {'REQUIRED' if limits.require_confirmation else 'NOT REQUIRED'}")
+    if limits.auto_execute:
+        print("    auto execute     ON - orders place with NO human review")
     print(f"    allowlist        {', '.join(limits.allowlist)}")
     print()
     print(f"  Rules ({len(config.enabled_rules)} enabled of {len(config.rules)})")

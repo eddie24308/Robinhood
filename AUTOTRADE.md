@@ -133,6 +133,16 @@ each firing starts cold. Keep the weekly buy bound to a persistent session.
 The Routine's first instruction is still to check for broker tools and report
 honestly rather than pretend, because a connector can drop at any time.
 
+**It runs every weekday (`12 14 * * 1-5`), not only Mondays.** That is the other
+half of the `every_run` change: a rule that *may* fire on Tuesday is useless if
+nothing invokes it on Tuesday. The cooldown, not the cron, is what keeps the buy
+weekly — so most runs correctly do nothing and report "cooling down".
+
+The ledger lives in the repo working tree, which is ephemeral. If `.autotrade/` is
+empty the cooldown history is gone and the rules look ready to fire on a day they
+should not, so the Routine cross-checks `get_equity_orders` with
+`placed_agent="agentic"` before placing anything.
+
 ## Kill switch
 
 ```bash

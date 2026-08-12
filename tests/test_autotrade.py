@@ -415,6 +415,48 @@ def test_cooldown_prevents_same_day_double_buy(tmp_path: Path) -> None:
     assert second.actionable == []
 
 
+DCA_CONFIG = BASE_CONFIG.replace(
+    """condition = "price_below"
+threshold = 95.0""",
+    'condition = "every_run"',
+).replace("cooldown_days = 7", "cooldown_days = 6")
+
+
+def test_unfunded_day_does_not_skip_the_week(tmp_path: Path) -> None:
+    """The whole reason the DCA rules use `every_run` rather than `weekly_schedule`.
+
+    A weekday-gated rule has no catch-up: if Monday's buy is blocked because the
+    cash has not settled, the week is lost and the money sits idle. With
+    `every_run` the cooldown only starts from a *committed* fire, so a blocked
+    Monday leaves Tuesday free to buy.
+    """
+    config = load_config(write_config(tmp_path, DCA_CONFIG))
+    engine = Engine(config)
+
+    def day(offset: int, buying_power: float):
+        """Plan for TODAY + offset, with a quote taken that same day."""
+        now = NOW + timedelta(days=offset)
+        return engine.plan(
+            {"HOOD": Quote("HOOD", 93.0, now)},
+            today=TODAY + timedelta(days=offset),
+            now=now,
+            buying_power=buying_power,
+        )
+
+    monday = day(0, buying_power=0.0)
+    assert monday.actionable == []
+    assert any("buying_power" in reason for reason in monday.blocked[0].blocked_by)
+
+    tuesday = day(1, buying_power=250.0)
+    assert len(tuesday.actionable) == 1, "a blocked Monday must not consume the week"
+    engine.execute_paper(tuesday)
+
+    # And once it actually buys, the cooldown does its job.
+    wednesday = day(2, buying_power=250.0)
+    assert wednesday.actionable == []
+    assert any("cooling down" in e.reason for e in wednesday.evaluations)
+
+
 def test_execute_paper_refuses_in_live_mode(tmp_path: Path) -> None:
     """The most important negative test in the package."""
     text = BASE_CONFIG.replace('mode = "paper"', 'mode = "live"')

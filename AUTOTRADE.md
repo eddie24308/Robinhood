@@ -65,7 +65,11 @@ agent: place_equity_order  (only for the ones you approved)
 `run` is paper-only and refuses in live mode; live must go through `plan`, so
 the intent file and the review step cannot be skipped by habit.
 
-## Monday checklist
+## Weekly checklist
+
+Nominally Monday, but the rules are `every_run` with a 6-day cooldown, so any
+day works — if Monday is blocked for funding, running this on Tuesday buys the
+week rather than skipping it.
 
 `autotrade.toml` is gitignored and the working container is ephemeral, so a new
 session starts from the repo with no live config. Recreating it is two lines:
@@ -204,11 +208,29 @@ python -m autotrade rules      # list conditions
 | `drawdown_from_high` | price is `threshold`% below the `lookback_days` high |
 | `rally_from_low` | price is `threshold`% above the `lookback_days` low |
 | `near_period_low` | price is within `threshold`% of the `lookback_days` low |
-| `weekly_schedule` | it is `weekday` (plain DCA) |
-| `every_run` | always, throttled by `cooldown_days` |
+| `weekly_schedule` | it is `weekday` — fires only on that day, never catches up |
+| `every_run` | always, throttled by `cooldown_days` (what the DCA rules use) |
 
 `cooldown_days` is checked *before* the condition, so a rule that fired
 yesterday cannot fire again today no matter what the price does.
+
+### Why the weekly buys use `every_run`, not `weekly_schedule`
+
+`weekly_schedule` looks the obvious fit for "buy every Monday", and it is the
+wrong one, because it has no catch-up. It compares `today.weekday()` to the
+target and nothing else. If Monday's buy is blocked — cash still unsettled, a
+wide spread, a run that never happened — the rule is simply silent until the
+following Monday, and the money sits idle for a week.
+
+`every_run` fires on the first day the order can actually clear, with
+`cooldown_days = 6` doing the weekly throttling. The cooldown reads from
+`Ledger.last_fired()`, which counts only *committed* intents, so a blocked
+Monday leaves the week open and Tuesday buys instead.
+`test_unfunded_day_does_not_skip_the_week` pins that behaviour.
+
+The trade-off is that the buy day drifts: a week delayed once stays delayed.
+That is the right trade — a DCA plan cares that the money goes in, not which
+weekday it goes in on.
 
 ### On "buy at the lowest"
 

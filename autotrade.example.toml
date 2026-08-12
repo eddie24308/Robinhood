@@ -80,8 +80,13 @@ auto_execute = false
 [[rules]]
 id = "vti-weekly"
 symbol = "VTI"
-condition = "weekly_schedule"
-weekday = "monday"
+# `every_run`, not `weekly_schedule`. A Monday-only condition has no catch-up:
+# if Monday's buy is blocked — no buying power, a wide spread, a missed run —
+# the week is simply skipped and settled cash sits idle until the next Monday.
+# `every_run` fires on the first day the buy can actually clear, and the
+# cooldown is what keeps it weekly. Cooldown starts from the last *committed*
+# fire (see Ledger.last_fired), so a blocked proposal does not consume the week.
+condition = "every_run"
 amount_usd = 15.0
 # 6 days keeps this to once per week even if `plan` runs every day.
 cooldown_days = 6
@@ -103,8 +108,7 @@ failures automatically."""
 [[rules]]
 id = "vxus-weekly"
 symbol = "VXUS"
-condition = "weekly_schedule"
-weekday = "monday"
+condition = "every_run"   # same reasoning as vti-weekly above
 amount_usd = 10.0
 cooldown_days = 6
 note = "International developed + emerging markets."
